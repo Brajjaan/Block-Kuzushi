@@ -1,187 +1,294 @@
 ﻿#include <math.h>
 #include <stdio.h>
 #include "raylib.h"
-#include <stdlib.h> // Include for rand() and srand()
-#include <time.h>   // Include for time()
+#include <stdlib.h>
+#include <time.h>
 
-typedef enum GameScreen { MENU, GAME, GAME_OVER } GameScreen;
+typedef enum GameScreen { MENU, GAME, WIN, GAME_OVER } GameScreen;
 
 #define screenWidth 800
-#define screenHeight 450
+#define screenHeight 480
 #define blocksPerRow 10
 #define blockRowCount 5
 #define blockWidth (screenWidth / blocksPerRow - 20)
 #define blockHeight 20
+#define ballRadius 10
 
-Rectangle blocks[blockRowCount][blocksPerRow];
-int blockHealth[blockRowCount][blocksPerRow];
-bool visible[blockRowCount][blocksPerRow];
-Rectangle paddle;
-Vector2 ball, extraBall;
-float ballSpeedX, ballSpeedY, extraBallSpeedX, extraBallSpeedY;
-const int ballRadius = 10;
+typedef struct {
+    Rectangle rect;
+    bool visible;
+    int health;
+} Block;
 
-int specialBlockRow, specialBlockCol;
-bool specialBlockVisible;
-bool extraBallActive;
+typedef struct {
+    Vector2 position;
+    float speedX, speedY;
+    bool active;
+} Ball;
+
+typedef struct {
+    Vector2 position;
+    bool active;
+} PowerUp;
+
+typedef struct {
+    Rectangle paddle;
+    int lives;
+    Ball mainBall;
+    Block blocks[blockRowCount][blocksPerRow];
+    Block flashingBlock;
+    bool flashingBlockVisible;
+    PowerUp powerUp;
+    float resetTimer;
+    bool isResetting;
+    float ballStartDelay;
+    bool ballDelayed;
+} GameState;
+
+GameState gameState;
+GameScreen currentScreen = MENU;
 
 void InitGameState() {
-    paddle = (Rectangle){ screenWidth/2 - 50, screenHeight - 30, 100, 20 };
-    ball = (Vector2){ paddle.x + paddle.width / 2, paddle.y - 10 };
-    ballSpeedY = -500.0f;
-    ballSpeedX = (rand() % 101) - 50;
+    gameState.lives = 1;
+    gameState.paddle = (Rectangle){ screenWidth / 2 - 50, screenHeight - 50, 100, 20 };
 
-    srand(time(NULL)); // Initialize random seed
+    gameState.mainBall.position = (Vector2){ gameState.paddle.x + gameState.paddle.width / 2, gameState.paddle.y - ballRadius * 2 };
+    gameState.mainBall.speedX = 0;
+    gameState.mainBall.speedY = 0;
+    gameState.mainBall.active = false;
+
+    gameState.ballStartDelay = 1.0f;
+    gameState.ballDelayed = true;
+
+    gameState.resetTimer = 0;
+    gameState.isResetting = false;
+
+    srand(time(NULL));
+
+    // Initialize all blocks
     for (int i = 0; i < blockRowCount; i++) {
         for (int j = 0; j < blocksPerRow; j++) {
-            blocks[i][j].x = j * (blockWidth + 20) + 10;
-            blocks[i][j].y = i * (blockHeight + 10) + 40;
-            blocks[i][j].width = blockWidth;
-            blocks[i][j].height = blockHeight;
-            visible[i][j] = true;
-            blockHealth[i][j] = 1; // Default health is 1
+            gameState.blocks[i][j].rect.x = j * (blockWidth + 20) + 10;
+            gameState.blocks[i][j].rect.y = i * (blockHeight + 10) + 40;
+            gameState.blocks[i][j].rect.width = blockWidth;
+            gameState.blocks[i][j].rect.height = blockHeight;
+            gameState.blocks[i][j].visible = true;
+            gameState.blocks[i][j].health = 1;
         }
     }
 
     for (int k = 0; k < 5; k++) {
         int i = rand() % blockRowCount;
         int j = rand() % blocksPerRow;
-        blockHealth[i][j] = (rand() % 2) + 2;
+        if ((i != blockRowCount / 2) || (j != blocksPerRow / 2)) { // Ensure it doesn't replace the flashing block
+            gameState.blocks[i][j].health = (rand() % 2) + 2;  // Randomly assign 2 or 3 health
+        }
     }
 
-    // Extraball pos
-    int rowsFromBottom[] = {1, 2};
-    specialBlockRow = blockRowCount - 1 - rowsFromBottom[rand() % 2];
-    specialBlockCol = rand() % blocksPerRow;
-    specialBlockVisible = true;
+    gameState.flashingBlock.rect.x = (blocksPerRow / 2) * (blockWidth + 20) + 10;
+    gameState.flashingBlock.rect.y = 40;
+    gameState.flashingBlock.rect.width = blockWidth;
+    gameState.flashingBlock.rect.height = blockHeight;
+    gameState.flashingBlock.visible = true;
+    gameState.flashingBlock.health = 1;
 
-    extraBallActive = false;
+    gameState.powerUp.position = (Vector2){0, 0};
+    gameState.powerUp.active = false;
+}
+
+
+void ResetBall() {
+    gameState.mainBall.position = (Vector2){ gameState.paddle.x + gameState.paddle.width / 2, gameState.paddle.y - ballRadius * 2 };
+    gameState.mainBall.speedX = 0;
+    gameState.mainBall.speedY = 0;
+    gameState.isResetting = false;
+    //wait
+    gameState.ballStartDelay = 1.0f;
+    gameState.ballDelayed = true;
+}
+
+
+
+bool AreAllBlocksDestroyed() {
+    for (int i = 0; i < blockRowCount; i++) {
+        for (int j = 0; j < blocksPerRow; j++) {
+            if (gameState.blocks[i][j].visible) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void UpdateGame(float deltaTime) {
+    if (gameState.isResetting) {
+        gameState.resetTimer -= deltaTime;
+        if (gameState.resetTimer <= 0) {
+            ResetBall();
+        }
+    }
+
+    if (gameState.ballDelayed) {
+        gameState.ballStartDelay -= deltaTime;
+        if (gameState.ballStartDelay <= 0) {
+            gameState.mainBall.speedX = (rand() % 201) - 100;
+            gameState.mainBall.speedY = -500;
+            gameState.mainBall.active = true;
+            gameState.ballDelayed = false;
+        }
+    }
+
+    if (IsKeyDown(KEY_LEFT)) gameState.paddle.x -= 400 * deltaTime;
+    if (IsKeyDown(KEY_RIGHT)) gameState.paddle.x += 400 * deltaTime;
+    if (gameState.paddle.x < 0) gameState.paddle.x = 0;
+    if (gameState.paddle.x + gameState.paddle.width > screenWidth) gameState.paddle.x = screenWidth - gameState.paddle.width;
+
+    if (!gameState.isResetting && !gameState.ballDelayed) {
+        gameState.mainBall.position.x += gameState.mainBall.speedX * deltaTime;
+        gameState.mainBall.position.y += gameState.mainBall.speedY * deltaTime;
+
+        if (gameState.mainBall.position.x < ballRadius || gameState.mainBall.position.x > screenWidth - ballRadius) {
+            gameState.mainBall.speedX *= -1;
+        }
+
+        if (gameState.mainBall.position.y < ballRadius) {
+            gameState.mainBall.speedY *= -1;
+        }
+
+        if (gameState.mainBall.position.y >= screenHeight - 30 && !gameState.isResetting) {
+            gameState.lives--;
+            if (gameState.lives > 0) {
+                ResetBall();
+            } else {
+                currentScreen = GAME_OVER;
+            }
+        }
+
+        if (CheckCollisionCircleRec(gameState.mainBall.position, ballRadius, gameState.paddle)) {
+            gameState.mainBall.speedY = -fabsf(gameState.mainBall.speedY);
+            gameState.mainBall.speedX = (gameState.mainBall.position.x - (gameState.paddle.x + gameState.paddle.width / 2)) / (gameState.paddle.width / 2) * 250;
+        }
+
+        for (int i = 0; i < blockRowCount; i++) {
+            for (int j = 0; j < blocksPerRow; j++) {
+                if (gameState.blocks[i][j].visible && CheckCollisionCircleRec(gameState.mainBall.position, ballRadius, gameState.blocks[i][j].rect)) {
+                    gameState.blocks[i][j].health--;
+                    if (gameState.blocks[i][j].health <= 0) {
+                        gameState.blocks[i][j].visible = false;
+                    }
+                    gameState.mainBall.speedY *= -1;
+                }
+            }
+        }
+
+        if (gameState.flashingBlock.visible && CheckCollisionCircleRec(gameState.mainBall.position, ballRadius, gameState.flashingBlock.rect)) {
+            gameState.flashingBlock.visible = false;
+            gameState.powerUp.position = (Vector2){ gameState.flashingBlock.rect.x + blockWidth / 2, gameState.flashingBlock.rect.y };
+            gameState.powerUp.active = true;
+            gameState.mainBall.speedY *= -1;
+        }
+
+        if (gameState.powerUp.active) {
+            gameState.powerUp.position.y += 200 * deltaTime;
+            if (gameState.powerUp.position.y >= screenHeight) {
+                gameState.powerUp.active = false;
+            }
+        }
+
+        // PowerCollect
+        if (gameState.powerUp.active && CheckCollisionCircleRec(gameState.powerUp.position, ballRadius, gameState.paddle)) {
+            gameState.lives++;
+            gameState.powerUp.active = false;
+        }
+
+        if (AreAllBlocksDestroyed()) {
+            currentScreen = WIN;
+        }
+    }
+}
+
+void DrawGame() {
+    BeginDrawing();
+    ClearBackground(BLACK);
+
+    DrawRectangleRec(gameState.paddle, WHITE);
+    DrawCircleV(gameState.mainBall.position, ballRadius, WHITE);
+
+    for (int i = 0; i < blockRowCount; i++) {
+        for (int j = 0; j < blocksPerRow; j++) {
+            if (gameState.blocks[i][j].visible) {
+                Color blockColor = (gameState.blocks[i][j].health == 1) ? YELLOW : (gameState.blocks[i][j].health == 2) ? RED : BLUE;
+                DrawRectangleRec(gameState.blocks[i][j].rect, blockColor);
+            }
+        }
+    }
+
+    if (gameState.flashingBlock.visible) {
+        Color flashingColor = (fmod(GetTime() * 10, 2) < 1) ? GREEN : RED;
+        DrawRectangleRec(gameState.flashingBlock.rect, flashingColor);
+    }
+
+    if (gameState.powerUp.active) {
+        DrawRectangle(gameState.powerUp.position.x - 5, gameState.powerUp.position.y - 5, 10, 10, GREEN);
+    }
+
+    DrawText(TextFormat("Lives: %d", gameState.lives), 10, screenHeight - 25, 20, WHITE);
+    EndDrawing();
 }
 
 int main(void) {
     InitWindow(screenWidth, screenHeight, "Block Kuzushi wannabe type game");
     SetTargetFPS(60);
 
-    GameScreen currentScreen = MENU;
-
     while (!WindowShouldClose()) {
+        float deltaTime = GetFrameTime();
+
         switch (currentScreen) {
             case MENU:
+                BeginDrawing();
+                ClearBackground(BLACK);
+                DrawText("Press ENTER to Start", screenWidth / 2 - MeasureText("Press ENTER to Start", 20) / 2, screenHeight / 2 - 10, 20, WHITE);
+                DrawText("Press ESC to Exit", screenWidth / 2 - MeasureText("Press ESC to Exit", 20) / 2, screenHeight / 2 + 20, 20, WHITE);
+                EndDrawing();
+
                 if (IsKeyPressed(KEY_ENTER)) {
                     InitGameState();
                     currentScreen = GAME;
                 }
-                if (IsKeyPressed(KEY_ESCAPE)) {
-                    CloseWindow();
-                }
                 break;
 
             case GAME:
-                float deltaTime = GetFrameTime();
-                if (IsKeyDown(KEY_LEFT)) paddle.x -= 400 * deltaTime;
-                if (IsKeyDown(KEY_RIGHT)) paddle.x += 400 * deltaTime;
-                if (paddle.x < 0) paddle.x = 0;
-                if (paddle.x + paddle.width > screenWidth) paddle.x = screenWidth - paddle.width;
+                UpdateGame(deltaTime);
+                DrawGame();
+                break;
 
-                ball.x += ballSpeedX * deltaTime;
-                ball.y += ballSpeedY * deltaTime;
-                if (ball.x <= 0 + ballRadius || ball.x >= screenWidth - ballRadius) ballSpeedX *= -1;
-                if (ball.y <= ballRadius) ballSpeedY *= -1;
-                if (ball.y >= screenHeight) currentScreen = GAME_OVER;
+            case WIN:
+                BeginDrawing();
+                ClearBackground(BLACK);
+                DrawText("You Win! Press R to Restart or ESC to Exit", screenWidth / 2 - MeasureText("You Win! Press R to Restart or ESC to Exit", 20) / 2, screenHeight / 2, 20, GREEN);
+                EndDrawing();
 
-                if (extraBallActive) {
-                    extraBall.x += extraBallSpeedX * deltaTime;
-                    extraBall.y += extraBallSpeedY * deltaTime;
-                    if (extraBall.x <= 0 + ballRadius || extraBall.x >= screenWidth - ballRadius) extraBallSpeedX *= -1;
-                    if (extraBall.y <= ballRadius) extraBallSpeedY *= -1;
-                    if (extraBall.y >= screenHeight) extraBallActive = false;
+                if (IsKeyPressed(KEY_R)) {
+                    InitGameState();
+                    currentScreen = GAME;
+                } else if (IsKeyPressed(KEY_ESCAPE)) {
+                    CloseWindow();
+                    return 0;
                 }
-
-                if (CheckCollisionCircleRec(ball, ballRadius, paddle)) {
-                    ballSpeedY = -fabsf(ballSpeedY);
-                    ballSpeedX = (ball.x - (paddle.x + paddle.width / 2)) / (paddle.width / 2) * 250;
-                }
-
-                if (extraBallActive && CheckCollisionCircleRec(extraBall, ballRadius, paddle)) {
-                    extraBallSpeedY = -fabsf(extraBallSpeedY);
-                }
-
-                // Collisions with blocks for both balls
-                for (int i = 0; i < blockRowCount; i++) {
-                    for (int j = 0; j < blocksPerRow; j++) {
-                        if (visible[i][j]) {
-                            if (CheckCollisionCircleRec(ball, ballRadius, blocks[i][j])) {
-                                blockHealth[i][j]--;
-                                if (blockHealth[i][j] <= 0) {
-                                    visible[i][j] = false;
-                                    if (i == specialBlockRow && j == specialBlockCol) {
-                                        extraBallActive = true;
-                                        extraBall = (Vector2){ blocks[i][j].x + blockWidth / 2, blocks[i][j].y + blockHeight };
-                                        extraBallSpeedX = (rand() % 101) - 50;
-                                        extraBallSpeedY = 200;
-                                    }
-                                }
-                                ballSpeedY = -ballSpeedY;
-                            }
-                            if (extraBallActive && CheckCollisionCircleRec(extraBall, ballRadius, blocks[i][j])) {
-                                blockHealth[i][j]--;
-                                if (blockHealth[i][j] <= 0) visible[i][j] = false;
-                                extraBallSpeedY = -extraBallSpeedY;
-                            }
-                        }
-                    }
-                }
-
                 break;
 
             case GAME_OVER:
+                BeginDrawing();
+                ClearBackground(BLACK);
+                DrawText("Game Over! Press R to Restart", screenWidth / 2 - MeasureText("Game Over! Press R to Restart", 20) / 2, screenHeight / 2, 20, RED);
+                EndDrawing();
+
                 if (IsKeyPressed(KEY_R)) {
                     InitGameState();
                     currentScreen = GAME;
                 }
-                if (IsKeyPressed(KEY_ESCAPE)) {
-                    currentScreen = MENU;
-                }
                 break;
         }
-
-        BeginDrawing();
-        ClearBackground(BLACK);
-
-        switch (currentScreen) {
-            case MENU:
-                DrawText("Press ENTER to Start", screenWidth / 2 - MeasureText("Press ENTER to Start", 20) / 2, screenHeight / 2 - 10, 20, WHITE);
-                DrawText("Press ESC to Exit", screenWidth / 2 - MeasureText("Press ESC to Exit", 20) / 2, screenHeight / 2 + 20, 20, WHITE);
-                break;
-            case GAME:
-                DrawRectangleRec(paddle, WHITE);
-                DrawCircleV(ball, ballRadius, WHITE);
-                if (extraBallActive) {
-                    DrawCircleV(extraBall, ballRadius, BLUE);
-                }
-                for (int i = 0; i < blockRowCount; i++) {
-                    for (int j = 0; j < blocksPerRow; j++) {
-                        if (visible[i][j]) {
-                            Color blockColor = YELLOW;
-                            if (blockHealth[i][j] == 2) blockColor = RED;
-                            else if (blockHealth[i][j] == 3) blockColor = BLUE;
-                            DrawRectangleRec(blocks[i][j], blockColor);
-
-                            if (i == specialBlockRow && j == specialBlockCol && visible[i][j]) {
-                                if (((int)(GetTime() * 10) % 2) == 0) {
-                                    DrawRectangleLinesEx(blocks[i][j], 2, MAGENTA);
-                                }
-                            }
-                        }
-                    }
-                }
-                break;
-            case GAME_OVER:
-                DrawText("Game Over! Press R to Restart or ESC to Exit", screenWidth / 2 - MeasureText("Game Over! Press R to Restart or ESC to Return to Menu", 20) / 2, screenHeight / 2 - 10, 20, RED);
-                break;
-        }
-
-        EndDrawing();
     }
 
     CloseWindow();
