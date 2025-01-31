@@ -14,20 +14,24 @@ typedef enum GameScreen { MENU, GAME, GAME_OVER } GameScreen;
 #define blockHeight 20
 
 Rectangle blocks[blockRowCount][blocksPerRow];
-int blockHealth[blockRowCount][blocksPerRow]; // Array to track health of each block
+int blockHealth[blockRowCount][blocksPerRow];
 bool visible[blockRowCount][blocksPerRow];
 Rectangle paddle;
-Vector2 ball;
-float ballSpeedX, ballSpeedY;
+Vector2 ball, extraBall;
+float ballSpeedX, ballSpeedY, extraBallSpeedX, extraBallSpeedY;
 const int ballRadius = 10;
+
+int specialBlockRow, specialBlockCol;
+bool specialBlockVisible;
+bool extraBallActive;
 
 void InitGameState() {
     paddle = (Rectangle){ screenWidth/2 - 50, screenHeight - 30, 100, 20 };
     ball = (Vector2){ paddle.x + paddle.width / 2, paddle.y - 10 };
-    ballSpeedX = 0.0f;
-    ballSpeedY = -300.0f;
+    ballSpeedY = -500.0f;
+    ballSpeedX = (rand() % 101) - 50;
 
-    srand(time(NULL)); // Seed for random number generation
+    srand(time(NULL)); // Initialize random seed
     for (int i = 0; i < blockRowCount; i++) {
         for (int j = 0; j < blocksPerRow; j++) {
             blocks[i][j].x = j * (blockWidth + 20) + 10;
@@ -39,21 +43,26 @@ void InitGameState() {
         }
     }
 
-    // Assign higher health to 5 random blocks
     for (int k = 0; k < 5; k++) {
         int i = rand() % blockRowCount;
         int j = rand() % blocksPerRow;
-        if (blockHealth[i][j] == 1) { // Ensure the block doesn't already have increased health
-            blockHealth[i][j] = (k % 2) + 2; // Randomly assign health of 2 or 3
-        }
+        blockHealth[i][j] = (rand() % 2) + 2;
     }
+
+    // Extraball pos
+    int rowsFromBottom[] = {1, 2};
+    specialBlockRow = blockRowCount - 1 - rowsFromBottom[rand() % 2];
+    specialBlockCol = rand() % blocksPerRow;
+    specialBlockVisible = true;
+
+    extraBallActive = false;
 }
 
 int main(void) {
     InitWindow(screenWidth, screenHeight, "Block Kuzushi wannabe type game");
+    SetTargetFPS(60);
 
     GameScreen currentScreen = MENU;
-    SetTargetFPS(60);
 
     while (!WindowShouldClose()) {
         switch (currentScreen) {
@@ -76,27 +85,49 @@ int main(void) {
 
                 ball.x += ballSpeedX * deltaTime;
                 ball.y += ballSpeedY * deltaTime;
-                if (ball.x >= screenWidth - ballRadius || ball.x <= ballRadius) ballSpeedX *= -1;
+                if (ball.x <= 0 + ballRadius || ball.x >= screenWidth - ballRadius) ballSpeedX *= -1;
                 if (ball.y <= ballRadius) ballSpeedY *= -1;
+                if (ball.y >= screenHeight) currentScreen = GAME_OVER;
 
-                if (ball.y >= screenHeight) {
-                    currentScreen = GAME_OVER;
+                if (extraBallActive) {
+                    extraBall.x += extraBallSpeedX * deltaTime;
+                    extraBall.y += extraBallSpeedY * deltaTime;
+                    if (extraBall.x <= 0 + ballRadius || extraBall.x >= screenWidth - ballRadius) extraBallSpeedX *= -1;
+                    if (extraBall.y <= ballRadius) extraBallSpeedY *= -1;
+                    if (extraBall.y >= screenHeight) extraBallActive = false;
                 }
 
                 if (CheckCollisionCircleRec(ball, ballRadius, paddle)) {
                     ballSpeedY = -fabsf(ballSpeedY);
-                    ballSpeedX = (ball.x - (paddle.x + paddle.width / 2)) / (paddle.width / 2) * 150;
+                    ballSpeedX = (ball.x - (paddle.x + paddle.width / 2)) / (paddle.width / 2) * 250;
                 }
 
+                if (extraBallActive && CheckCollisionCircleRec(extraBall, ballRadius, paddle)) {
+                    extraBallSpeedY = -fabsf(extraBallSpeedY);
+                }
+
+                // Collisions with blocks for both balls
                 for (int i = 0; i < blockRowCount; i++) {
                     for (int j = 0; j < blocksPerRow; j++) {
-                        if (visible[i][j] && CheckCollisionCircleRec(ball, ballRadius, blocks[i][j])) {
-                            blockHealth[i][j]--;
-                            if (blockHealth[i][j] <= 0) {
-                                visible[i][j] = false;
+                        if (visible[i][j]) {
+                            if (CheckCollisionCircleRec(ball, ballRadius, blocks[i][j])) {
+                                blockHealth[i][j]--;
+                                if (blockHealth[i][j] <= 0) {
+                                    visible[i][j] = false;
+                                    if (i == specialBlockRow && j == specialBlockCol) {
+                                        extraBallActive = true;
+                                        extraBall = (Vector2){ blocks[i][j].x + blockWidth / 2, blocks[i][j].y + blockHeight };
+                                        extraBallSpeedX = (rand() % 101) - 50;
+                                        extraBallSpeedY = 200;
+                                    }
+                                }
+                                ballSpeedY = -ballSpeedY;
                             }
-                            ballSpeedY = fabsf(ballSpeedY);
-                            break;
+                            if (extraBallActive && CheckCollisionCircleRec(extraBall, ballRadius, blocks[i][j])) {
+                                blockHealth[i][j]--;
+                                if (blockHealth[i][j] <= 0) visible[i][j] = false;
+                                extraBallSpeedY = -extraBallSpeedY;
+                            }
                         }
                     }
                 }
@@ -125,13 +156,22 @@ int main(void) {
             case GAME:
                 DrawRectangleRec(paddle, WHITE);
                 DrawCircleV(ball, ballRadius, WHITE);
+                if (extraBallActive) {
+                    DrawCircleV(extraBall, ballRadius, BLUE);
+                }
                 for (int i = 0; i < blockRowCount; i++) {
                     for (int j = 0; j < blocksPerRow; j++) {
                         if (visible[i][j]) {
-                            Color blockColor = YELLOW; // Default color for health 1
-                            if (blockHealth[i][j] == 2) blockColor = RED; // Red for health 2
-                            else if (blockHealth[i][j] == 3) blockColor = BLUE; // Blue for health 3
+                            Color blockColor = YELLOW;
+                            if (blockHealth[i][j] == 2) blockColor = RED;
+                            else if (blockHealth[i][j] == 3) blockColor = BLUE;
                             DrawRectangleRec(blocks[i][j], blockColor);
+
+                            if (i == specialBlockRow && j == specialBlockCol && visible[i][j]) {
+                                if (((int)(GetTime() * 10) % 2) == 0) {
+                                    DrawRectangleLinesEx(blocks[i][j], 2, MAGENTA);
+                                }
+                            }
                         }
                     }
                 }
